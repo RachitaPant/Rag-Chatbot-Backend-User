@@ -1,0 +1,12 @@
+fastapi
+uvicorn
+python-dotenv
+gTTS
+pinecone-client
+langchain
+langchain-community
+langchain-pinecone
+langchain-core
+langchain-groq
+langchain_huggingface
+boto3
