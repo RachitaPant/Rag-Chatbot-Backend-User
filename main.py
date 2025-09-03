@@ -12,7 +12,16 @@ from langchain_core.documents import Document
 from langchain.chains.combine_documents import create_stuff_documents_chain
 from langchain.chains.retrieval import create_retrieval_chain
 from langchain_core.runnables import RunnableLambda
+import redis
+import json
 
+REDIS_URL = os.getenv("REDIS_URL")
+if not REDIS_URL:
+    raise ValueError("Missing REDIS_URL")
+
+redis_client = redis.Redis.from_url(REDIS_URL, decode_responses=True)
+
+SESSION_TTL = 86400
 app = FastAPI()
 
 # Enable CORS
@@ -70,9 +79,9 @@ def pinecone_retriever(query: str, k: int = 3):
 # Initialize retriever + LLM
 retriever = RunnableLambda(lambda x: pinecone_retriever(x["input"]))
 
-prompt_template = """You are a helpful assistant for lexi capital and you are going to represent them as their helper, answers questions based solely on the provided documents. 
+prompt_template = """You are a helpful assistant that answers questions based solely on the provided documents. 
 If the documents do not contain the information needed, respond with:
-"I don't have the information in the provided context.How else may I help you?"
+"I don't have the information in the provided context."
 
 Documents:
 {context}
@@ -93,9 +102,9 @@ combine_docs_chain = create_stuff_documents_chain(llm, PROMPT)
 qa_chain = create_retrieval_chain(retriever, combine_docs_chain)
 
 class Query(BaseModel):
+    session_id: str
     question: str
 
-# Init Polly client
 polly = boto3.client(
     "polly",
     aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID"),
@@ -111,6 +120,15 @@ async def ask(query: Query):
     try:
         result = qa_chain.invoke({"input": query.question})
         answer = result.get("answer", "I could not generate an answer.")
+        
+        # Store chat in Redis with expiry
+        session_key = f"chat:{query.session_id}"
+        message = {
+            "question": query.question,
+            "answer": answer
+        }
+        redis_client.rpush(session_key, json.dumps(message))
+        redis_client.expire(session_key, SESSION_TTL)
 
         # Generate audio (Polly stream → bytes)
         polly_response = polly.synthesize_speech(
@@ -136,3 +154,16 @@ async def stream_audio(audio_id: str):
     if audio_id not in audio_cache:
         raise HTTPException(status_code=404, detail="Audio not found")
     return StreamingResponse(io.BytesIO(audio_cache[audio_id]), media_type="audio/mpeg")
+
+@app.get("/history/{session_id}")
+async def get_history(session_id: str):
+    session_key = f"chat:{session_id}"
+    raw_history = redis_client.lrange(session_key, 0, -1)
+    history = [json.loads(msg) for msg in raw_history]
+    return {"session_id": session_id, "history": history}
+
+@app.get("/start-session")
+async def start_session():
+    session_id = str(uuid.uuid4())
+    return {"session_id": session_id}
+
