@@ -70,9 +70,9 @@ def pinecone_retriever(query: str, k: int = 3):
 # Initialize retriever + LLM
 retriever = RunnableLambda(lambda x: pinecone_retriever(x["input"]))
 
-prompt_template = """You are a helpful assistant that answers questions based solely on the provided documents. 
+prompt_template = """You are a helpful assistant for lexi capital and you are going to represent them as their helper, answers questions based solely on the provided documents. 
 If the documents do not contain the information needed, respond with:
-"I don't have the information in the provided context."
+"I don't have the information in the provided context.How else may I help you?"
 
 Documents:
 {context}
