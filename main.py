@@ -79,16 +79,23 @@ def pinecone_retriever(query: str, k: int = 3):
 # Initialize retriever + LLM
 retriever = RunnableLambda(lambda x: pinecone_retriever(x["input"]))
 
-prompt_template = """You are a helpful assistant that answers questions based solely on the provided documents. 
-If the documents do not contain the information needed, respond with:
-"I don't have the information in the provided context."
+prompt_template = """
+You are a helpful and friendly support assistant. 
+Answer the user's question using only the information provided in the documents below. 
+Do not mention the documents explicitly in your response. 
+If the answer is not in the documents, politely say:
+"I'm sorry, I don't have that information right now."
+
+Keep your answers clear, concise, and conversational, as if you are directly helping the user.
 
 Documents:
 {context}
 
 Question: {input}
 
-Answer:"""
+Answer:
+"""
+
 
 PROMPT = PromptTemplate(template=prompt_template, input_variables=["context", "input"])
 
