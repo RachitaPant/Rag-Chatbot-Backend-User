@@ -10,3 +10,4 @@ langchain-core
 langchain-groq
 langchain-huggingface
 boto3
+redis 
