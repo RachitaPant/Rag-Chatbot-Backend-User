@@ -8,5 +8,5 @@ langchain-community
 langchain-pinecone
 langchain-core
 langchain-groq
-langchain_huggingface
+langchain-huggingface
 boto3
