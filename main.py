@@ -1,13 +1,11 @@
-from fastapi import FastAPI, HTTPException,UploadFile, File
+from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 import os, io, uuid, json
 from dotenv import load_dotenv
 import boto3
-import redis
-import aiofiles
-import requests 
+import requests
 
 from pinecone import Pinecone
 from langchain_groq import ChatGroq
@@ -16,21 +14,20 @@ from langchain_core.documents import Document
 from langchain.chains.combine_documents import create_stuff_documents_chain
 from langchain.chains.retrieval import create_retrieval_chain
 from langchain_core.runnables import RunnableLambda
+from langchain.memory import ConversationBufferMemory
+from langchain.memory.chat_message_histories import RedisChatMessageHistory
 
 # =====================
 # Config & Setup
 # =====================
 load_dotenv()
 
-
-
-
 REDIS_URL = os.getenv("REDIS_URL")
 if not REDIS_URL:
     raise ValueError("Missing REDIS_URL")
 
-redis_client = redis.Redis.from_url(REDIS_URL, decode_responses=True)
-SESSION_TTL = 600
+SESSION_TTL = 600  # seconds
+MAX_TURNS = 5      # Number of previous exchanges to keep in context
 
 app = FastAPI()
 
@@ -51,9 +48,8 @@ GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 if not PINECONE_API_KEY or not GROQ_API_KEY:
     raise ValueError("Missing required API keys")
 
-
 # =====================
-# Pinecone
+# Pinecone Retriever
 # =====================
 def get_pinecone_index():
     pc = Pinecone(api_key=PINECONE_API_KEY)
@@ -96,24 +92,26 @@ prompt_template = """
 You are Lexcapital's official support assistant. 
 Always speak as a knowledgeable and trusted representative of Lexcapital. 
 
-Use the provided documents as your source of truth when answering questions. 
-Do not mention or reference the documents in your responses. 
-Present information confidently as if you are explaining on behalf of Lexcapital. 
+Conversation history:
+{history}
 
+User question: {input}
+
+Use the provided documents as your source of truth. 
+Do not mention or reference the documents. 
 If the documents do not contain the answer, politely respond with:
 "I'm sorry, I don't have that information right now. Would you like me to connect you with our team?"
-
-Keep your answers professional, concise, and helpful, while maintaining a supportive and approachable tone. 
 
 Documents:
 {context}
 
-Question: {input}
-
 Answer:
 """
 
-PROMPT = PromptTemplate(template=prompt_template, input_variables=["context", "input"])
+PROMPT = PromptTemplate(
+    template=prompt_template,
+    input_variables=["history", "input", "context"]
+)
 
 llm = ChatGroq(
     groq_api_key=GROQ_API_KEY,
@@ -125,14 +123,12 @@ retriever = RunnableLambda(lambda x: pinecone_retriever(x["input"]))
 combine_docs_chain = create_stuff_documents_chain(llm, PROMPT)
 qa_chain = create_retrieval_chain(retriever, combine_docs_chain)
 
-
 # =====================
 # Models
 # =====================
 class Query(BaseModel):
     session_id: str
     question: str
-
 
 # =====================
 # AWS Polly (TTS)
@@ -147,6 +143,18 @@ polly = boto3.client(
 # In-memory audio cache
 audio_cache = {}
 
+# =====================
+# Helper: Redis Memory
+# =====================
+def get_memory(session_id: str):
+    history = RedisChatMessageHistory(session_id=f"chat:{session_id}", url=REDIS_URL)
+    memory = ConversationBufferMemory(
+        memory_key="history",
+        chat_memory=history,
+        return_messages=True,
+        k=MAX_TURNS
+    )
+    return memory
 
 # =====================
 # Endpoints
@@ -154,9 +162,14 @@ audio_cache = {}
 @app.post("/ask")
 async def ask(query: Query):
     try:
-        # Run QA chain
-        result = qa_chain.invoke({"input": query.question})
-        print("QA Chain Output:", result)  # Debugging
+        # Load session memory
+        memory = get_memory(query.session_id)
+
+        # Invoke QA chain with memory
+        result = qa_chain.invoke({
+            "input": query.question,
+            "history": memory.load_memory_variables({}).get("history", [])
+        })
 
         if isinstance(result, dict):
             answer = result.get("answer", "I could not generate an answer.")
@@ -164,20 +177,16 @@ async def ask(query: Query):
         else:
             answer = str(result)
             sources = []
-        
-        # Save Q/A in Redis (list)
-        session_key = f"chat:{query.session_id}"
-        message = {"question": query.question, "answer": answer}
-        redis_client.rpush(session_key, json.dumps(message))
-        redis_client.expire(session_key, SESSION_TTL)
 
-        # Generate TTS with Polly
+        # Save current turn automatically in Redis
+        memory.save_context({"input": query.question}, {"output": answer})
+
+        # Generate TTS
         polly_response = polly.synthesize_speech(
             Text=answer,
             OutputFormat="mp3",
             VoiceId="Raveena"
         )
-
         audio_id = str(uuid.uuid4())
         audio_cache[audio_id] = polly_response["AudioStream"].read()
 
@@ -186,6 +195,7 @@ async def ask(query: Query):
             "sources": sources,
             "audio_url": f"/stream/{audio_id}"
         }
+
     except Exception as e:
         print(f"Error in /ask: {e}")
         raise HTTPException(status_code=500, detail=f"Error processing query: {e}")
@@ -200,16 +210,20 @@ async def stream_audio(audio_id: str):
 
 @app.get("/history/{session_id}")
 async def get_history(session_id: str):
-    session_key = f"chat:{session_id}"
-    raw_history = redis_client.lrange(session_key, 0, -1)
-    history = [json.loads(msg) for msg in raw_history]
-    return {"session_id": session_id, "history": history}
+    # Use LangChain's RedisChatMessageHistory to read
+    history_obj = RedisChatMessageHistory(session_id=f"chat:{session_id}", url=REDIS_URL)
+    messages = history_obj.messages
+    formatted_history = [{"question": msg.content if msg.type=="human" else None,
+                          "answer": msg.content if msg.type=="ai" else None} 
+                         for msg in messages]
+    return {"session_id": session_id, "history": formatted_history}
 
 
 @app.get("/start-session")
 async def start_session():
     session_id = str(uuid.uuid4())
     return {"session_id": session_id}
+
 
 @app.post("/api/groq/stt")
 async def stt(file: UploadFile = File(...)):
