@@ -93,7 +93,7 @@ retriever = RunnableLambda(lambda x: pinecone_retriever(x["input"]))
 
 # History-aware retriever prompt
 retriever_prompt = ChatPromptTemplate.from_messages([
-    ("system", "You are Lexi Capital's support assistant. Rewrite the user question "
+    ("system", "You are Lexcapital's support assistant. Rewrite the user question "
                "based on the conversation so far, to make it a standalone query "
                "for retrieving relevant documents."),
     MessagesPlaceholder("chat_history"),
@@ -109,18 +109,20 @@ history_aware_retriever = create_history_aware_retriever(
 
 # QA prompt with memory slot
 qa_prompt = ChatPromptTemplate.from_messages([
-    ("system", "You are Lexi Capital's official support assistant. "
+    ("system", "You are Lexcapital's official support assistant. "
                "Always speak as a knowledgeable representative. "
-               "Use the provided documents as your source of truth when answering questions. "
+               "Use the provided documents (context) below as your source of truth when answering questions. "
                "Do not mention or reference the documents in your responses. "
-               "Present information confidently as if you are explaining on behalf of Lexi Capital. "
+               "Present information confidently as if you are explaining on behalf of Lexcapital. "
                "If documents lack the answer, say: "
                "'I'm sorry, I don't have that information right now. "
                "Would you like me to connect you with our team?' "
-               "Keep your answers professional, concise, and helpful."),
+               "Keep your answers professional, concise, and helpful.\n\n"
+               "Context:\n{context}"),
     MessagesPlaceholder("chat_history"),
     ("user", "{input}")
 ])
+
 
 # Document combination
 combine_docs_chain = create_stuff_documents_chain(llm, qa_prompt)
