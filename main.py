@@ -30,7 +30,7 @@ if not REDIS_URL:
     raise ValueError("Missing REDIS_URL")
 
 redis_client = redis.Redis.from_url(REDIS_URL, decode_responses=True)
-SESSION_TTL = 86400
+SESSION_TTL = 600
 
 app = FastAPI()
 
