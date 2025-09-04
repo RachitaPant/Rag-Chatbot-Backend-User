@@ -13,6 +13,7 @@ from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain.chains import create_history_aware_retriever, create_retrieval_chain
 from langchain.chains.combine_documents import create_stuff_documents_chain
 from langchain.memory import ConversationBufferMemory
+from langchain_core.runnables import RunnableLambda
 
 # =====================
 # Config & Setup
@@ -87,33 +88,47 @@ llm = ChatGroq(
     temperature=0
 )
 
-# History-aware retriever
-from langchain_core.runnables import RunnableLambda
+# Base retriever wrapper
 retriever = RunnableLambda(lambda x: pinecone_retriever(x["input"]))
-history_aware_retriever = create_history_aware_retriever(llm, retriever)
 
-# Prompt with memory slot
+# History-aware retriever prompt
+retriever_prompt = ChatPromptTemplate.from_messages([
+    ("system", "You are Lexi Capital's support assistant. Rewrite the user question "
+               "based on the conversation so far, to make it a standalone query "
+               "for retrieving relevant documents."),
+    MessagesPlaceholder("chat_history"),
+    ("user", "{input}")
+])
+
+# History-aware retriever
+history_aware_retriever = create_history_aware_retriever(
+    llm,
+    retriever,
+    retriever_prompt
+)
+
+# QA prompt with memory slot
 qa_prompt = ChatPromptTemplate.from_messages([
     ("system", "You are Lexi Capital's official support assistant. "
                "Always speak as a knowledgeable representative. "
-               "Use the provided documents as your source of truth when answering questions."
+               "Use the provided documents as your source of truth when answering questions. "
                "Do not mention or reference the documents in your responses. "
                "Present information confidently as if you are explaining on behalf of Lexi Capital. "
                "If documents lack the answer, say: "
                "'I'm sorry, I don't have that information right now. "
-               "Would you like me to connect you with our team?'"
-               "Keep your answers professional, concise, and helpful, while maintaining a supportive and approachable tone."),
-    MessagesPlaceholder("chat_history"),  
+               "Would you like me to connect you with our team?' "
+               "Keep your answers professional, concise, and helpful."),
+    MessagesPlaceholder("chat_history"),
     ("user", "{input}")
 ])
 
 # Document combination
 combine_docs_chain = create_stuff_documents_chain(llm, qa_prompt)
 
-# Retrieval chain
+# Retrieval chain (with memory-aware retriever)
 qa_chain = create_retrieval_chain(history_aware_retriever, combine_docs_chain)
 
-# Memory (Redis-backed)
+# Memory (we’ll store in Redis manually)
 memory = ConversationBufferMemory(
     memory_key="chat_history",
     return_messages=True,
