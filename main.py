@@ -14,6 +14,10 @@ from langchain.chains.retrieval import create_retrieval_chain
 from langchain_core.runnables import RunnableLambda
 import redis
 import json
+from fastapi import FastAPI, UploadFile, File
+from fastapi.middleware.cors import CORSMiddleware
+import aiofiles
+import requests 
 
 REDIS_URL = os.getenv("REDIS_URL")
 if not REDIS_URL:
@@ -179,3 +183,10 @@ async def start_session():
     session_id = str(uuid.uuid4())
     return {"session_id": session_id}
 
+@app.post("/api/groq/stt")
+async def stt(file: UploadFile = File(...)):
+    content = await file.read()
+    groq_api_url = "https://api/groq.com/openai/v1/audio/translations"
+    headers = {"Authorization": f"Bearer {GROQ_API_KEY}"}
+    response = requests.post(groq_api_url, headers=headers, files={"file": ("audio.wav", content, "audio/wav")})
+    return response.json()
