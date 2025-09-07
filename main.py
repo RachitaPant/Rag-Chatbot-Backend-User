@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, UploadFile, File
+from fastapi import FastAPI, HTTPException, UploadFile, File,WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
@@ -232,3 +232,68 @@ async def stt(file: UploadFile = File(...)):
     headers = {"Authorization": f"Bearer {GROQ_API_KEY}"}
     response = requests.post(groq_api_url, headers=headers, files={"file": ("audio.wav", content, "audio/wav")})
     return response.json()
+
+@app.websocket("/ws/chat")
+async def websocket_chat(websocket: WebSocket):
+    await websocket.accept()
+    session_id = None
+    memory = None
+
+    try:
+        while True:
+            data = await websocket.receive_json()
+            session_id = data.get("session_id")
+            question = data.get("question")
+
+            if not session_id or not question:
+                await websocket.send_json({"error": "Missing session_id or question."})
+                continue
+
+            # Initialize memory if first message
+            if memory is None:
+                memory = get_memory(session_id)
+
+            # Get conversation history
+            history = memory.load_memory_variables({}).get("history", [])
+
+            # Stream processing: Send interim status
+            await websocket.send_json({"status": "processing", "question": question})
+
+            # Run QA chain
+            result = qa_chain.invoke({
+                "input": question,
+                "history": history
+            })
+
+            if isinstance(result, dict):
+                answer = result.get("answer", "I could not generate an answer.")
+                sources = [doc.metadata for doc in result.get("context", [])]
+            else:
+                answer = str(result)
+                sources = []
+
+            # Save memory state
+            memory.save_context({"input": question}, {"output": answer})
+
+            # Generate TTS Audio
+            polly_response = polly.synthesize_speech(
+                Text=answer,
+                OutputFormat="mp3",
+                VoiceId="Raveena"
+            )
+            audio_id = str(uuid.uuid4())
+            audio_cache[audio_id] = polly_response["AudioStream"].read()
+
+            # Send final result
+            await websocket.send_json({
+                "answer": answer,
+                "sources": sources,
+                "audio_url": f"/stream/{audio_id}"
+            })
+
+    except WebSocketDisconnect:
+        print(f"WebSocket disconnected: session {session_id}")
+
+    except Exception as e:
+        print(f"WebSocket Error: {e}")
+        await websocket.close(code=1011)

@@ -13,3 +13,4 @@ boto3
 redis 
 aiofiles
 python-multipart
+uvicorn[standard]
