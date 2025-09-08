@@ -11,7 +11,7 @@ from dotenv import load_dotenv
 import boto3
 import requests
 from typing import List
-
+from livekit import api as lk_api
 from pinecone import Pinecone
 from langchain_groq import ChatGroq
 from langchain_core.prompts import PromptTemplate
@@ -339,3 +339,34 @@ async def websocket_chat(websocket: WebSocket):
             await websocket.close(code=1011)
         except Exception:
             pass
+
+
+
+# Define a Pydantic model for the request body
+class TokenRequest(BaseModel):
+    room_name: str
+    participant_name: str
+
+# Updated token endpoint
+@app.post("/livekit/token")
+async def generate_livekit_token(request: TokenRequest):
+    try:
+        lkapi = lk_api.LiveKitAPI(
+            url=os.getenv("LIVEKIT_URL"),
+            api_key=os.getenv("LIVEKIT_API_KEY"),
+            api_secret=os.getenv("LIVEKIT_API_SECRET")
+        )
+        token = lk_api.AccessToken() \
+            .with_identity(request.participant_name) \
+            .with_name(request.participant_name) \
+            .with_grants(lk_api.VideoGrants(
+                room_join=True,
+                room=request.room_name,
+                can_publish=True,
+                can_subscribe=True
+            )) \
+            .to_jwt()
+        return {"token": token, "room": request.room_name}
+    except Exception as e:
+        print(f"Error generating LiveKit token: {e}")
+        raise HTTPException(status_code=500, detail=f"Token generation failed: {e}")
