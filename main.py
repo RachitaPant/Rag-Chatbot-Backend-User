@@ -12,6 +12,7 @@ import boto3
 import requests
 from typing import List
 from livekit import api as lk_api
+from livekit.api.access_token import AccessToken, VideoGrants
 from pinecone import Pinecone
 from langchain_groq import ChatGroq
 from langchain_core.prompts import PromptTemplate
@@ -342,31 +343,42 @@ async def websocket_chat(websocket: WebSocket):
 
 
 
-# Define a Pydantic model for the request body
 class TokenRequest(BaseModel):
     room_name: str
     participant_name: str
 
-# Updated token endpoint
 @app.post("/livekit/token")
 async def generate_livekit_token(request: TokenRequest):
     try:
-        lkapi = lk_api.LiveKitAPI(
-            url=os.getenv("LIVEKIT_URL"),
-            api_key=os.getenv("LIVEKIT_API_KEY"),
-            api_secret=os.getenv("LIVEKIT_API_SECRET")
+        api_key = os.getenv("LIVEKIT_API_KEY")
+        api_secret = os.getenv("LIVEKIT_API_SECRET")
+        if not api_key or not api_secret:
+            raise ValueError("LIVEKIT_API_KEY or LIVEKIT_API_SECRET not set")
+
+        if not request.room_name:
+            raise ValueError("room_name is required")
+        if not request.participant_name:
+            raise ValueError("participant_name is required")
+
+        # create the token
+        at = AccessToken(api_key=api_key, api_secret=api_secret)
+        at = at.with_identity(request.participant_name)
+        at = at.with_name(request.participant_name)
+        # Here we use "with_grants" instead of add_grant
+        grants = VideoGrants(
+            room_join=True,
+            room=request.room_name,
+            can_publish=True,       # optional, defaults are OK if you want
+            can_subscribe=True       # optional
         )
-        token = lk_api.AccessToken() \
-            .with_identity(request.participant_name) \
-            .with_name(request.participant_name) \
-            .with_grants(lk_api.VideoGrants(
-                room_join=True,
-                room=request.room_name,
-                can_publish=True,
-                can_subscribe=True
-            )) \
-            .to_jwt()
+        at = at.with_grants(grants)
+        # optionally set TTL
+        # at = at.with_ttl(datetime.timedelta(hours=1))
+
+        token = at.to_jwt()
+
         return {"token": token, "room": request.room_name}
     except Exception as e:
-        print(f"Error generating LiveKit token: {e}")
-        raise HTTPException(status_code=500, detail=f"Token generation failed: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Token generation failed: {str(e)}")
