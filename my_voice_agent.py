@@ -2,7 +2,7 @@ import asyncio
 from dotenv import load_dotenv
 from livekit import agents
 from livekit.agents import AgentSession, Agent, RoomInputOptions, WorkerOptions, cli
-from livekit.plugins import openai, cartesia, deepgram, noise_cancellation, silero
+from livekit.plugins import groq, cartesia, deepgram, noise_cancellation, silero  # Changed: Use groq instead of openai
 import logging
 import os
 
@@ -15,23 +15,22 @@ logger.info(f"LIVEKIT_URL: {os.getenv('LIVEKIT_URL')}")
 logger.info(f"LIVEKIT_API_KEY: {os.getenv('LIVEKIT_API_KEY')[:4]}... (hidden)")
 logger.info(f"DEEPGRAM_API_KEY: {os.getenv('DEEPGRAM_API_KEY')[:4]}... (hidden)")
 logger.info(f"CARTESIA_API_KEY: {os.getenv('CARTESIA_API_KEY')[:4]}... (hidden)")
-logger.info(f"OPENAI_API_KEY: {os.getenv('OPENAI_API_KEY')[:4]}... (hidden)")
+logger.info(f"GROQ_API_KEY: {os.getenv('GROQ_API_KEY')[:4]}... (hidden)")  # Changed: Log Groq key
 
 class Assistant(Agent):
     def __init__(self) -> None:
         super().__init__(instructions="You are a helpful voice AI assistant.")
 
 async def entrypoint(ctx: agents.JobContext):
-   
     logger.info(f"Joining room: {ctx.room.name}")
     try:
         logger.info("Initializing Deepgram STT")
         stt = deepgram.STT(model="nova-3", language="multi")
         logger.info("Deepgram STT initialized")
 
-        logger.info("Initializing OpenAI LLM")
-        llm = openai.LLM(model="gpt-4o-mini")
-        logger.info("OpenAI LLM initialized")
+        logger.info("Initializing Groq LLM")  # Changed: Groq LLM
+        llm = groq.LLM(model="llama-3.1-8b-instant")  # Changed: Use Groq model (fast and free-tier friendly)
+        logger.info("Groq LLM initialized")
 
         logger.info("Initializing Cartesia TTS")
         tts = cartesia.TTS(model="sonic-2", voice="f786b574-daa5-4673-aa0c-cbe3e8534c02")
@@ -43,7 +42,7 @@ async def entrypoint(ctx: agents.JobContext):
 
         session = AgentSession(
             stt=stt,
-            llm=llm,
+            llm=llm, 
             tts=tts,
             vad=vad,
         )
@@ -66,5 +65,4 @@ async def entrypoint(ctx: agents.JobContext):
         raise
 
 if __name__ == "__main__":
-    # Use the official way to start the worker
     cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint))
