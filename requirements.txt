@@ -15,7 +15,3 @@ aiofiles
 python-multipart
 uvicorn[standard]
 livekit-agents
-torch
-onnxruntime
-livekit-agents[openai,cartesia,deepgram,noise_cancellation,silero,turn_detector]
-livekit-plugins-groq
